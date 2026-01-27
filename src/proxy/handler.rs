@@ -406,12 +406,25 @@ impl ProxyHandler {
                 let body = resp.body_mut().collect().await.map(|b| b.to_bytes()).ok();
                 let body_size = body.as_ref().map(|b| b.len()).unwrap_or(0);
 
+                // Try to decompress body for traffic inspection
+                let content_encoding = resp_headers
+                    .get("content-encoding")
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+
+                let decoded_body = if !content_encoding.is_empty() {
+                    body.as_ref()
+                        .and_then(|b| decompress_body(b, content_encoding))
+                } else {
+                    body.as_ref().map(|b| b.to_vec())
+                };
+
                 let response_info = ResponseInfo {
                     status: status.as_u16(),
                     reason: status.canonical_reason().unwrap_or("").to_string(),
                     http_version: format!("{:?}", resp.version()),
                     headers: resp_headers.clone(),
-                    body: body.as_ref().map(|b| b.to_vec()),
+                    body: decoded_body,
                     body_size,
                     modified: target_url != full_url,
                     modification_source: if target_url != full_url {
@@ -573,4 +586,30 @@ fn is_hop_by_hop_header(name: &str) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
+}
+
+/// Decompress body based on content-encoding
+fn decompress_body(body: &[u8], encoding: &str) -> Option<Vec<u8>> {
+    match encoding.to_lowercase().as_str() {
+        "gzip" => {
+            use std::io::Read;
+            let mut decoder = flate2::read::GzDecoder::new(body);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed).ok()?;
+            Some(decompressed)
+        }
+        "deflate" => {
+            use std::io::Read;
+            let mut decoder = flate2::read::DeflateDecoder::new(body);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed).ok()?;
+            Some(decompressed)
+        }
+        "br" => {
+            let mut decompressed = Vec::new();
+            brotli::BrotliDecompress(&mut std::io::Cursor::new(body), &mut decompressed).ok()?;
+            Some(decompressed)
+        }
+        _ => None,
+    }
 }

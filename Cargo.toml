@@ -67,6 +67,10 @@ mime_guess = "2.0"
 futures-util = "0.3"
 tokio-tungstenite = "0.21"
 
+# Decompression
+flate2 = "1.0"
+brotli = "7.0"
+
 [dev-dependencies]
 tempfile = "3.9"
 

@@ -225,21 +225,73 @@ function showTrafficDetail(id) {
             .join('');
     };
 
-    // Format body
-    const formatBody = (body) => {
-        if (!body) return '<em>No body</em>';
+    // Format body based on content-type
+    const formatBody = (body, headers = {}) => {
+        if (!body || body.length === 0) return '<em>No body</em>';
+
+        // Check if content is compressed
+        const encoding = headers['content-encoding'] || '';
+        if (encoding === 'br' || encoding === 'gzip' || encoding === 'deflate') {
+            return `<em>Compressed data (${encoding}, ${body.length} bytes)</em>`;
+        }
+
+        const contentType = (headers['content-type'] || '').toLowerCase();
+
+        // Check if it's a known binary type
+        if (contentType.startsWith('image/') ||
+            contentType.startsWith('audio/') ||
+            contentType.startsWith('video/') ||
+            contentType.includes('octet-stream') ||
+            contentType.includes('pdf') ||
+            contentType.includes('zip') ||
+            contentType.includes('gzip')) {
+            return `<em>Binary data (${contentType}, ${body.length} bytes)</em>`;
+        }
+
         try {
             // Try to decode as text
             const text = typeof body === 'string' ? body : new TextDecoder().decode(new Uint8Array(body));
-            // Try to parse as JSON for pretty printing
-            try {
-                const json = JSON.parse(text);
-                return escapeHtml(JSON.stringify(json, null, 2));
-            } catch {
-                return escapeHtml(text.substring(0, 10000));
+
+            // Check if it looks like binary (has many non-printable characters)
+            const nonPrintable = text.split('').filter(c => {
+                const code = c.charCodeAt(0);
+                return code < 32 && code !== 9 && code !== 10 && code !== 13;
+            }).length;
+
+            if (nonPrintable > text.length * 0.1) {
+                return `<em>Binary data (${body.length} bytes)</em>`;
             }
+
+            // Format based on content-type
+            if (contentType.includes('json')) {
+                try {
+                    const json = JSON.parse(text);
+                    return `<pre class="body-json">${escapeHtml(JSON.stringify(json, null, 2))}</pre>`;
+                } catch {
+                    return `<pre class="body-text">${escapeHtml(text.substring(0, 50000))}</pre>`;
+                }
+            }
+
+            if (contentType.includes('html')) {
+                return `<pre class="body-html">${escapeHtml(text.substring(0, 50000))}</pre>`;
+            }
+
+            if (contentType.includes('xml')) {
+                return `<pre class="body-xml">${escapeHtml(text.substring(0, 50000))}</pre>`;
+            }
+
+            if (contentType.includes('css')) {
+                return `<pre class="body-css">${escapeHtml(text.substring(0, 50000))}</pre>`;
+            }
+
+            if (contentType.includes('javascript') || contentType.includes('ecmascript')) {
+                return `<pre class="body-js">${escapeHtml(text.substring(0, 50000))}</pre>`;
+            }
+
+            // Default: plain text
+            return `<pre class="body-text">${escapeHtml(text.substring(0, 50000))}</pre>`;
         } catch {
-            return '<em>Binary data</em>';
+            return `<em>Binary data (${body.length} bytes)</em>`;
         }
     };
 
@@ -260,9 +312,9 @@ function showTrafficDetail(id) {
             </div>
             <h4 style="margin: 1rem 0 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">Headers</h4>
             ${formatHeaders(entry.request.headers)}
-            ${entry.request.body ? `
-                <h4 style="margin: 1rem 0 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">Body</h4>
-                <div class="detail-body">${formatBody(entry.request.body)}</div>
+            ${entry.request.body && entry.request.body.length > 0 ? `
+                <h4 style="margin: 1rem 0 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">Body (${formatSize(entry.request.body_size)})</h4>
+                <div class="detail-body">${formatBody(entry.request.body, entry.request.headers)}</div>
             ` : ''}
         </div>
 
@@ -281,9 +333,9 @@ function showTrafficDetail(id) {
                 ` : ''}
                 <h4 style="margin: 1rem 0 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">Headers</h4>
                 ${formatHeaders(entry.response.headers)}
-                ${entry.response.body ? `
-                    <h4 style="margin: 1rem 0 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">Body</h4>
-                    <div class="detail-body">${formatBody(entry.response.body)}</div>
+                ${entry.response.body && entry.response.body.length > 0 ? `
+                    <h4 style="margin: 1rem 0 0.5rem; font-size: 0.8rem; color: var(--text-secondary);">Body (${formatSize(entry.response.body_size)})</h4>
+                    <div class="detail-body">${formatBody(entry.response.body, entry.response.headers)}</div>
                 ` : ''}
             </div>
         ` : '<div class="detail-section"><h3>Response</h3><em>Pending...</em></div>'}
