@@ -14,6 +14,29 @@ A high-performance MITM (Man-In-The-Middle) proxy written in Rust, inspired by [
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew tap johnsonlee/rustyman
+brew install rustyman
+```
+
+### Download Binary
+
+Download pre-built binaries from [GitHub Releases](https://github.com/johnsonlee/rustyman/releases).
+
+```bash
+# macOS/Linux
+tar -xzf rustyman-<target>.tar.gz
+chmod +x rustyman
+./rustyman --help
+```
+
+> **macOS users:** If you double-clicked to extract and see `Killed: 9`, remove the quarantine attribute:
+> ```bash
+> xattr -d com.apple.quarantine rustyman
+> ```
+
 ### From Source
 
 ```bash
@@ -29,7 +52,7 @@ cargo build --release
 
 ### Requirements
 
-- Rust 1.75+
+- Rust 1.75+ (for building from source)
 
 ## Quick Start
 
