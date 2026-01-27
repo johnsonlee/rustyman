@@ -18,7 +18,7 @@ A high-performance MITM (Man-In-The-Middle) proxy written in Rust, inspired by [
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/rustyman.git
+git clone https://github.com/johnsonlee/rustyman.git
 cd rustyman
 
 # Build release binary
@@ -29,8 +29,7 @@ cargo build --release
 
 ### Requirements
 
-- Rust 1.75+ (for building)
-- OpenSSL development libraries (for TLS)
+- Rust 1.75+
 
 ## Quick Start
 
@@ -273,6 +272,38 @@ Firefox uses its own certificate store:
 1. Open Firefox Settings → Privacy & Security → Certificates → View Certificates
 2. Import the CA certificate
 3. Check "Trust this CA to identify websites"
+
+## Architecture
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Client    │────▶│  Rustyman   │────▶│   Server    │
+│  (Browser)  │◀────│   Proxy     │◀────│  (Target)   │
+└─────────────┘     └─────────────┘     └─────────────┘
+                           │
+                    ┌──────┴──────┐
+                    │             │
+              ┌─────▼─────┐ ┌─────▼─────┐
+              │  Web UI   │ │  Traffic  │
+              │  (Axum)   │ │  Storage  │
+              └───────────┘ └───────────┘
+```
+
+## Development
+
+```bash
+# Run in development mode
+cargo run
+
+# Run tests
+cargo test
+
+# Format code
+cargo fmt
+
+# Run clippy lints
+cargo clippy
+```
 
 ## License
 
