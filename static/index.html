@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rustyman - MITM Proxy</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <h1>🦀 Rustyman</h1>
+            <div class="header-actions">
+                <button id="clear-btn" class="btn btn-danger">Clear Traffic</button>
+                <a href="/api/ca/cert" class="btn btn-primary" download>Download CA Cert</a>
+            </div>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab active" data-tab="traffic">Traffic</button>
+            <button class="tab" data-tab="rules">Rules</button>
+            <button class="tab" data-tab="settings">Settings</button>
+        </nav>
+
+        <main class="content">
+            <!-- Traffic Tab -->
+            <div id="traffic-tab" class="tab-content active">
+                <div class="toolbar">
+                    <input type="text" id="search-input" placeholder="Search URL (regex supported)..." class="search-input">
+                    <div class="stats">
+                        <span id="traffic-count">0</span> requests
+                    </div>
+                </div>
+                <div class="traffic-container">
+                    <table class="traffic-table">
+                        <thead>
+                            <tr>
+                                <th class="col-status">Status</th>
+                                <th class="col-method">Method</th>
+                                <th class="col-host">Host</th>
+                                <th class="col-path">Path</th>
+                                <th class="col-type">Type</th>
+                                <th class="col-size">Size</th>
+                                <th class="col-time">Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="traffic-body">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Rules Tab -->
+            <div id="rules-tab" class="tab-content">
+                <div class="rules-sections">
+                    <!-- Map Remote -->
+                    <section class="rule-section">
+                        <div class="section-header">
+                            <h2>Map Remote</h2>
+                            <button class="btn btn-small" onclick="showAddRuleModal('map-remote')">+ Add Rule</button>
+                        </div>
+                        <div id="map-remote-rules" class="rules-list"></div>
+                    </section>
+
+                    <!-- Map Local -->
+                    <section class="rule-section">
+                        <div class="section-header">
+                            <h2>Map Local</h2>
+                            <button class="btn btn-small" onclick="showAddRuleModal('map-local')">+ Add Rule</button>
+                        </div>
+                        <div id="map-local-rules" class="rules-list"></div>
+                    </section>
+
+                    <!-- Header Rules -->
+                    <section class="rule-section">
+                        <div class="section-header">
+                            <h2>Header Rewrite</h2>
+                            <button class="btn btn-small" onclick="showAddRuleModal('header')">+ Add Rule</button>
+                        </div>
+                        <div id="header-rules" class="rules-list"></div>
+                    </section>
+                </div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settings-tab" class="tab-content">
+                <div class="settings-container">
+                    <h2>Proxy Settings</h2>
+                    <div id="settings-form" class="settings-form">
+                        <div class="form-group">
+                            <label>Proxy Host</label>
+                            <input type="text" id="proxy-host" value="127.0.0.1">
+                        </div>
+                        <div class="form-group">
+                            <label>Proxy Port</label>
+                            <input type="number" id="proxy-port" value="8080">
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="mitm-enabled" checked>
+                                Enable HTTPS MITM
+                            </label>
+                        </div>
+                    </div>
+
+                    <h2>Statistics</h2>
+                    <div id="stats-container" class="stats-container">
+                        <div class="stat-item">
+                            <span class="stat-label">Total Requests</span>
+                            <span id="stat-traffic" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Cached Certificates</span>
+                            <span id="stat-certs" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Map Remote Rules</span>
+                            <span id="stat-map-remote" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Map Local Rules</span>
+                            <span id="stat-map-local" class="stat-value">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Header Rules</span>
+                            <span id="stat-header" class="stat-value">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Traffic Detail Modal -->
+        <div id="detail-modal" class="modal">
+            <div class="modal-content modal-large">
+                <span class="close" onclick="closeModal('detail-modal')">&times;</span>
+                <h2>Request Details</h2>
+                <div id="detail-content"></div>
+            </div>
+        </div>
+
+        <!-- Add Rule Modal -->
+        <div id="add-rule-modal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeModal('add-rule-modal')">&times;</span>
+                <h2 id="add-rule-title">Add Rule</h2>
+                <form id="add-rule-form" onsubmit="submitRule(event)">
+                    <div id="rule-form-content"></div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Add Rule</button>
+                        <button type="button" class="btn" onclick="closeModal('add-rule-modal')">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
