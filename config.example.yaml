@@ -1,0 +1,119 @@
+# Rustyman MITM Proxy Configuration
+# Copy this file to config.yaml and customize as needed
+
+# Proxy server settings
+proxy:
+  host: "127.0.0.1"
+  port: 8080
+  mitm_enabled: true
+  timeout: 30
+  max_connections: 1000
+
+# Web UI settings
+web_ui:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8081
+
+# Certificate settings
+cert:
+  ca_cert: "~/.rustyman/ca.crt"
+  ca_key: "~/.rustyman/ca.key"
+  auto_generate: true
+  ca_validity_days: 3650
+  cert_validity_days: 365
+
+# Logging settings
+logging:
+  level: "info"  # trace, debug, info, warn, error
+  format: "text"  # text, json
+  file: null  # Optional log file path
+  log_traffic: false
+
+# Map Remote rules - redirect requests to different servers
+map_remote:
+  # Example: Redirect API calls to staging server
+  - name: "api-to-staging"
+    enabled: true
+    pattern: "https://api\\.production\\.com/(.*)"
+    target: "https://api.staging.com/$1"
+    preserve_path: false
+    preserve_query: true
+
+  # Example: Version replacement in API path
+  - name: "api-v1-to-v2"
+    enabled: false
+    pattern: "https://api\\.example\\.com/v1/(.*)"
+    target: "https://api.example.com/v2/$1"
+    preserve_path: false
+    preserve_query: true
+
+# Map Local rules - serve local files for matching requests
+map_local:
+  # Example: Serve local mock response
+  - name: "mock-users-api"
+    enabled: true
+    pattern: "https://api\\.example\\.com/users"
+    local_path: "/path/to/mock/users.json"
+    mime_type: "application/json"
+
+  # Example: Serve entire directory
+  - name: "local-static-assets"
+    enabled: false
+    pattern: "https://cdn\\.example\\.com/static/(.*)"
+    local_path: "/path/to/local/static/$1"
+    mime_type: null
+
+# Header rewrite rules
+header_rules:
+  # Example: Add custom header to all requests
+  - name: "add-debug-header"
+    enabled: true
+    url_pattern: ".*"
+    apply_to_request: true
+    apply_to_response: false
+    operations:
+      - action: add
+        name: "X-Debug-Mode"
+        value: "true"
+
+  # Example: Remove tracking headers
+  - name: "remove-tracking"
+    enabled: false
+    url_pattern: ".*"
+    apply_to_request: true
+    apply_to_response: true
+    operations:
+      - action: remove
+        name: "X-Request-ID"
+      - action: remove
+        name: "X-Correlation-ID"
+
+  # Example: Modify User-Agent
+  - name: "modify-user-agent"
+    enabled: false
+    url_pattern: ".*"
+    apply_to_request: true
+    apply_to_response: false
+    operations:
+      - action: modify
+        name: "User-Agent"
+        value_pattern: "Chrome/\\d+"
+        replacement: "Chrome/999"
+
+  # Example: Add CORS headers to responses
+  - name: "add-cors-headers"
+    enabled: false
+    url_pattern: "https://api\\.example\\.com/.*"
+    apply_to_request: false
+    apply_to_response: true
+    operations:
+      - action: add
+        name: "Access-Control-Allow-Origin"
+        value: "*"
+      - action: add
+        name: "Access-Control-Allow-Methods"
+        value: "GET, POST, PUT, DELETE, OPTIONS"
+      - action: add
+        name: "Access-Control-Allow-Headers"
+        value: "Content-Type, Authorization"
