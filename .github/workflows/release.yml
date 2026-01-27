@@ -167,6 +167,21 @@ jobs:
             # Extract the zip and run rustyman.exe
             ```
 
+            ### macOS Users
+
+            Use command line to extract (avoids quarantine issues):
+
+            ```bash
+            tar -xzf rustyman-*-apple-darwin.tar.gz
+            ./rustyman --help
+            ```
+
+            If you double-clicked to extract and see `Killed: 9`, remove the quarantine attribute:
+
+            ```bash
+            xattr -d com.apple.quarantine rustyman
+            ```
+
             ### Checksums
 
             See `SHA256SUMS.txt` for file checksums.
