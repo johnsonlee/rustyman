@@ -282,12 +282,49 @@ pub struct MatchedRule {
 }
 
 /// Traffic events for real-time updates
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "event", content = "data")]
 pub enum TrafficEvent {
+    #[serde(rename = "request")]
     NewRequest(TrafficEntry),
+    #[serde(rename = "response")]
     ResponseReceived(TrafficEntry),
+    #[serde(rename = "completed")]
     Completed(TrafficEntry),
+    #[serde(rename = "cleared")]
     Cleared,
+}
+
+impl TrafficEvent {
+    /// Convert the event to a JSON string
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Convert the event to a pretty-printed JSON string
+    pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Get the event type as a string
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            TrafficEvent::NewRequest(_) => "request",
+            TrafficEvent::ResponseReceived(_) => "response",
+            TrafficEvent::Completed(_) => "completed",
+            TrafficEvent::Cleared => "cleared",
+        }
+    }
+
+    /// Get the traffic entry if this event contains one
+    pub fn entry(&self) -> Option<&TrafficEntry> {
+        match self {
+            TrafficEvent::NewRequest(e) => Some(e),
+            TrafficEvent::ResponseReceived(e) => Some(e),
+            TrafficEvent::Completed(e) => Some(e),
+            TrafficEvent::Cleared => None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -48,11 +48,11 @@ src/
 │   ├── map_remote.rs    # URL redirect rules with regex
 │   ├── map_local.rs     # Local file serving rules
 │   └── header.rs        # Header rewrite rules with regex
-├── traffic/mod.rs       # Traffic recording & WebSocket broadcasting
+├── traffic/mod.rs       # Traffic recording & broadcast channel
 └── web/
     ├── mod.rs           # Web UI server (axum)
-    ├── api.rs           # REST API endpoints
-    └── websocket.rs     # Real-time traffic WebSocket
+    ├── api.rs           # REST API endpoints + SSE traffic streaming
+    └── websocket.rs     # Legacy WebSocket support
 
 static/                  # Web UI frontend files
 ├── index.html
@@ -81,7 +81,7 @@ static/                  # Web UI frontend files
    - Establishes TLS with client using generated cert
    - Forwards decrypted traffic to target server
 3. Rules (Map Remote, Map Local, Header) are applied
-4. Traffic is recorded and broadcast via WebSocket
+4. Traffic is recorded and broadcast via SSE endpoint (`/api/events`)
 
 ### Rule Priority
 1. **Map Local** - Checked first, serves local files if matched
@@ -126,6 +126,27 @@ cargo test rules::tests
 ## Notes
 
 - CA certificate is auto-generated on first run at `~/.rustyman/ca.crt`
-- Web UI uses WebSocket for real-time traffic updates
+- Real-time traffic streaming via SSE endpoint: `GET /api/events`
+- Web UI uses EventSource API for real-time traffic updates
 - Traffic entries are stored in memory (configurable max entries)
 - The proxy handles both HTTP and HTTPS traffic on the same port
+
+## Real-time Traffic Streaming
+
+The `/api/events` SSE endpoint streams traffic events as JSON:
+
+```bash
+# Consume events via curl
+curl -N http://localhost:8081/api/events
+
+# Filter with jq
+curl -N http://localhost:8081/api/events | grep "^data:" | jq -R 'fromjson?'
+```
+
+Event types:
+- `request` - New HTTP request received
+- `response` - Response received from server
+- `completed` - Request/response cycle complete
+- `cleared` - Traffic log cleared
+
+Multiple consumers can connect simultaneously (broadcast channel).

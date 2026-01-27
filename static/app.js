@@ -1,12 +1,12 @@
 // State
 let trafficEntries = new Map();
-let ws = null;
+let eventSource = null;
 let currentRuleType = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initTabs();
-    initWebSocket();
+    initEventStream();
     loadInitialData();
     initEventListeners();
 });
@@ -34,23 +34,43 @@ function initTabs() {
     });
 }
 
-// WebSocket for real-time updates
-function initWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${window.location.host}/ws/traffic`);
+// Server-Sent Events for real-time updates
+function initEventStream() {
+    // Close existing connection if any
+    if (eventSource) {
+        eventSource.close();
+    }
 
-    ws.onmessage = (event) => {
+    eventSource = new EventSource('/api/events');
+
+    // Listen for specific event types
+    eventSource.addEventListener('request', (event) => {
         const data = JSON.parse(event.data);
-        handleTrafficEvent(data);
-    };
+        handleTrafficEvent({ event_type: 'new_request', data: data.data });
+    });
 
-    ws.onclose = () => {
-        console.log('WebSocket closed, reconnecting...');
-        setTimeout(initWebSocket, 3000);
-    };
+    eventSource.addEventListener('response', (event) => {
+        const data = JSON.parse(event.data);
+        handleTrafficEvent({ event_type: 'response_received', data: data.data });
+    });
 
-    ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
+    eventSource.addEventListener('completed', (event) => {
+        const data = JSON.parse(event.data);
+        handleTrafficEvent({ event_type: 'completed', data: data.data });
+    });
+
+    eventSource.addEventListener('cleared', (event) => {
+        handleTrafficEvent({ event_type: 'cleared', data: null });
+    });
+
+    eventSource.onerror = (error) => {
+        console.error('EventSource error:', error);
+        // Reconnect after 3 seconds
+        setTimeout(() => {
+            if (eventSource.readyState === EventSource.CLOSED) {
+                initEventStream();
+            }
+        }, 3000);
     };
 }
 

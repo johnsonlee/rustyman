@@ -12,6 +12,8 @@ categories = ["network-programming", "development-tools"]
 [dependencies]
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+async-stream = "0.3"
 
 # HTTP/HTTPS
 hyper = { version = "1.1", features = ["full"] }
