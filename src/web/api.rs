@@ -3,11 +3,15 @@ use crate::proxy::ProxyState;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{sse::{Event, KeepAlive, Sse}, IntoResponse},
     Json,
 };
+use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
+use async_stream::stream;
 
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
@@ -245,4 +249,54 @@ pub async fn get_stats(State(state): State<Arc<ProxyState>>) -> impl IntoRespons
     };
 
     ApiResponse::success(stats)
+}
+
+/// SSE endpoint for real-time traffic events
+///
+/// This endpoint streams traffic events as Server-Sent Events (SSE).
+/// Each event is a JSON object with the following structure:
+/// ```json
+/// {"event":"request","data":{...}}
+/// {"event":"response","data":{...}}
+/// {"event":"completed","data":{...}}
+/// {"event":"cleared"}
+/// ```
+///
+/// Usage:
+/// - Browser: `new EventSource('/api/events')`
+/// - curl: `curl -N http://localhost:8081/api/events`
+/// - Any HTTP client that supports streaming
+pub async fn traffic_events(
+    State(state): State<Arc<ProxyState>>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let mut rx = state.traffic.subscribe();
+
+    let stream = stream! {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    if let Ok(json) = event.to_json() {
+                        let event_type = event.event_type();
+                        yield Ok(Event::default()
+                            .event(event_type)
+                            .data(json));
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Skip lagged messages, continue receiving
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // Channel closed, exit the loop
+                    break;
+                }
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(30))
+            .text("keepalive")
+    )
 }

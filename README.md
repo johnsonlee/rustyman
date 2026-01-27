@@ -232,7 +232,32 @@ The Web UI exposes a REST API:
 | `/api/rules/reload` | POST | Reload rules from config |
 | `/api/ca/cert` | GET | Download CA certificate |
 | `/api/stats` | GET | Get proxy statistics |
-| `/ws/traffic` | WS | WebSocket for real-time traffic |
+| `/api/events` | SSE | Real-time traffic event stream |
+
+## Real-time Traffic Streaming
+
+The `/api/events` endpoint provides Server-Sent Events (SSE) for real-time traffic monitoring:
+
+```bash
+# Stream all traffic events
+curl -N http://localhost:8081/api/events
+
+# Parse events with jq
+curl -N http://localhost:8081/api/events | grep "^data:" | cut -c6- | jq .
+```
+
+**Event Types:**
+- `request` - New HTTP request received
+- `response` - Response received from server
+- `completed` - Request/response cycle complete
+- `cleared` - Traffic log cleared
+
+**Example Event:**
+```json
+{"event":"completed","data":{"id":"uuid","request":{"method":"GET","url":"https://example.com"},"response":{"status":200}}}
+```
+
+Multiple clients can connect simultaneously - each receives the full event stream.
 
 ## Installing the CA Certificate
 
@@ -276,17 +301,32 @@ Firefox uses its own certificate store:
 ## Architecture
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Client    │────▶│  Rustyman   │────▶│   Server    │
-│  (Browser)  │◀────│   Proxy     │◀────│  (Target)   │
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                    ┌──────┴──────┐
-                    │             │
-              ┌─────▼─────┐ ┌─────▼─────┐
-              │  Web UI   │ │  Traffic  │
-              │  (Axum)   │ │  Storage  │
-              └───────────┘ └───────────┘
+┌─────────────┐         ┌─────────────────────────────────────┐         ┌─────────────┐
+│   Client    │────────▶│              Proxy (:8080)          │────────▶│   Server    │
+│  (Browser)  │◀────────│        HTTP/HTTPS MITM Handler      │◀────────│  (Target)   │
+└─────────────┘         └─────────────────┬───────────────────┘         └─────────────┘
+                                          │
+                                          ▼
+                        ┌─────────────────────────────────────┐
+                        │           Traffic Store             │
+                        │        (broadcast channel)          │
+                        └─────────────────┬───────────────────┘
+                                          │
+                                          ▼
+                        ┌─────────────────────────────────────┐
+                        │        Axum Server (:8081)          │
+                        ├─────────────────┬───────────────────┤
+                        │  Static Files   │   API Endpoints   │
+                        │  /index.html    │   /api/events     │
+                        │  /static/*      │   /api/traffic    │
+                        │                 │   /api/rules/*    │
+                        └────────┬────────┴─────────┬─────────┘
+                                 │                  │
+              ┌──────────────────┴──────────────────┴──────────────────┐
+              ▼                         ▼                              ▼
+        ┌───────────┐            ┌───────────┐                  ┌───────────┐
+        │  Browser  │            │   curl    │                  │  Scripts  │
+        └───────────┘            └───────────┘                  └───────────┘
 ```
 
 ## Development

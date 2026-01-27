@@ -66,7 +66,9 @@ impl WebServer {
             .route("/api/rules/reload", post(api::reload_rules))
             .route("/api/ca/cert", get(api::get_ca_cert))
             .route("/api/stats", get(api::get_stats))
-            // WebSocket for real-time traffic
+            // SSE endpoint for real-time traffic events
+            .route("/api/events", get(api::traffic_events))
+            // WebSocket for real-time traffic (legacy, prefer /api/events)
             .route("/ws/traffic", get(websocket::traffic_ws))
             .layer(cors)
             .with_state(Arc::clone(&self.state));
