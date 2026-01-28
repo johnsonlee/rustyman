@@ -581,9 +581,64 @@ body {
     text-align: center;
 }
 
-.tree-item .tree-label {
+/* Tree leaf node (clickable path) */
+.tree-leaf {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 1rem;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    transition: background 0.2s;
+    border-radius: 3px;
+}
+
+.tree-leaf:hover {
+    background: var(--bg-secondary);
+}
+
+.tree-leaf-name {
+    color: var(--text-primary);
+    font-family: monospace;
+}
+
+/* Path requests list in modal */
+.path-requests-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.path-request-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    transition: background 0.2s;
+}
+
+.path-request-item:hover {
+    background: var(--bg-tertiary);
+}
+
+.path-request-item .path-query {
+    flex: 1;
     color: var(--text-secondary);
     font-family: monospace;
+    font-size: 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.path-request-item .path-size,
+.path-request-item .path-time,
+.path-request-item .path-timestamp {
+    color: var(--text-secondary);
     font-size: 0.75rem;
 }
 
@@ -646,6 +701,7 @@ body {
 .traffic-table tr.hidden,
 .tree-host.hidden,
 .tree-node.hidden,
+.tree-leaf.hidden,
 .tree-item.hidden {
     display: none;
 }

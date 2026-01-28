@@ -247,45 +247,57 @@ function applyListFilter() {
 
 // Apply filter to tree view
 function applyTreeFilter() {
+    if (!currentFilter) {
+        // No filter - show everything
+        document.querySelectorAll('.tree-host, .tree-node, .tree-leaf').forEach(el => {
+            el.classList.remove('hidden');
+        });
+        return;
+    }
+
     const hosts = document.querySelectorAll('.tree-host');
     hosts.forEach(hostEl => {
-        const items = hostEl.querySelectorAll('.tree-item');
-        let visibleCount = 0;
+        const host = hostEl.dataset.host;
+        let hostVisible = false;
 
-        items.forEach(item => {
-            const id = item.dataset.id;
-            const entry = trafficEntries.get(id);
-            if (entry && matchesFilter(entry)) {
-                item.classList.remove('hidden');
-                visibleCount++;
+        // Filter leaf nodes
+        const leaves = hostEl.querySelectorAll('.tree-leaf');
+        leaves.forEach(leaf => {
+            const path = leaf.dataset.path;
+            const fullPath = `${host}${path}`;
+
+            // Check if any entry for this path matches the filter
+            let hasMatch = false;
+            trafficEntries.forEach(entry => {
+                const entryPath = entry.request.path.split('?')[0];
+                if (entry.request.host === host && entryPath === path.split('?')[0]) {
+                    if (matchesFilter(entry)) {
+                        hasMatch = true;
+                    }
+                }
+            });
+
+            if (hasMatch) {
+                leaf.classList.remove('hidden');
+                hostVisible = true;
             } else {
-                item.classList.add('hidden');
+                leaf.classList.add('hidden');
             }
         });
 
-        // Update node counts based on visible items
-        const nodes = hostEl.querySelectorAll('.tree-node');
+        // Update parent node visibility
+        const nodes = Array.from(hostEl.querySelectorAll('.tree-node')).reverse();
         nodes.forEach(node => {
-            const nodeItems = node.querySelectorAll(':scope > .tree-node-children > .tree-item:not(.hidden)');
-            const childNodes = node.querySelectorAll(':scope > .tree-node-children > .tree-node:not(.hidden)');
-            const nodeCount = node.querySelector('.tree-node-count');
-
-            // Count visible items in this node and descendants
-            const allItems = node.querySelectorAll('.tree-item:not(.hidden)');
-            if (nodeCount) {
-                nodeCount.textContent = allItems.length;
-            }
-
-            if (allItems.length > 0) {
+            const visibleChildren = node.querySelectorAll(':scope > .tree-node-children > .tree-leaf:not(.hidden), :scope > .tree-node-children > .tree-node:not(.hidden)');
+            if (visibleChildren.length > 0) {
                 node.classList.remove('hidden');
             } else {
                 node.classList.add('hidden');
             }
         });
 
-        if (visibleCount > 0) {
+        if (hostVisible) {
             hostEl.classList.remove('hidden');
-            hostEl.querySelector('.tree-host-count').textContent = `${visibleCount} requests`;
         } else {
             hostEl.classList.add('hidden');
         }
@@ -386,28 +398,13 @@ function renderTreeNode(name, node, hostKey, depth = 0) {
     const children = node._children || {};
     const childKeys = Object.keys(children).sort();
     const totalCount = countTreeEntries(node);
-    const hasChildren = childKeys.length > 0 || entries.length > 0;
+    const hasChildren = childKeys.length > 0;
+    const hasEntries = entries.length > 0;
 
-    if (!hasChildren) return '';
+    if (!hasChildren && !hasEntries) return '';
 
     const displayName = name || '/';
     const indent = depth * 16;
-
-    // Render entries at this level
-    const entryItems = entries.map((entry, idx) => {
-        const status = entry.response ? entry.response.status : '-';
-        const statusClass = getStatusClass(status);
-        const query = entry.request.path.includes('?')
-            ? entry.request.path.substring(entry.request.path.indexOf('?'))
-            : '';
-
-        return `
-            <div class="tree-item" data-id="${entry.id}" onclick="showTrafficDetail('${entry.id}')" style="padding-left: ${indent + 24}px;">
-                <span class="status ${statusClass}">${status}</span>
-                <span class="tree-label">${escapeHtml(query || `#${idx + 1}`)}</span>
-            </div>
-        `;
-    }).join('');
 
     // Render child nodes
     const childItems = childKeys.map(key =>
@@ -416,6 +413,17 @@ function renderTreeNode(name, node, hostKey, depth = 0) {
 
     // If this is a path segment node (not the implicit root)
     if (name !== null) {
+        // Leaf node (no children) - clickable to show requests
+        if (!hasChildren) {
+            return `
+                <div class="tree-leaf" data-path="${escapeHtml(node._path)}" data-host="${escapeHtml(hostKey.replace('host:', ''))}" onclick="showPathRequests('${escapeHtml(hostKey.replace('host:', ''))}', '${escapeHtml(node._path)}')" style="padding-left: ${indent}px;">
+                    <span class="tree-leaf-name">/${escapeHtml(displayName)}</span>
+                    <span class="tree-node-count">${totalCount}</span>
+                </div>
+            `;
+        }
+
+        // Has children - expandable node
         return `
             <div class="tree-node ${isExpanded ? 'expanded' : ''}" data-key="${escapeHtml(nodeKey)}">
                 <div class="tree-node-header" onclick="toggleTreeNode('${escapeHtml(nodeKey)}')" style="padding-left: ${indent}px;">
@@ -424,7 +432,6 @@ function renderTreeNode(name, node, hostKey, depth = 0) {
                     <span class="tree-node-count">${totalCount}</span>
                 </div>
                 <div class="tree-node-children">
-                    ${entryItems}
                     ${childItems}
                 </div>
             </div>
@@ -432,7 +439,7 @@ function renderTreeNode(name, node, hostKey, depth = 0) {
     }
 
     // Implicit root - just return children
-    return entryItems + childItems;
+    return childItems;
 }
 
 // Render tree view
@@ -659,6 +666,66 @@ function showTrafficDetail(id) {
                     <span class="detail-value">${new Date(entry.timing.completed) - new Date(entry.timing.request_received)}ms</span>
                 </div>
             ` : ''}
+        </div>
+    `;
+
+    document.getElementById('detail-modal').classList.add('active');
+}
+
+// Show all requests for a specific path
+function showPathRequests(host, path) {
+    // Find all entries matching this host and path (ignoring query string)
+    const pathWithoutQuery = path.split('?')[0];
+    const matchingEntries = [];
+
+    trafficEntries.forEach(entry => {
+        const entryPath = entry.request.path.split('?')[0];
+        if (entry.request.host === host && entryPath === pathWithoutQuery) {
+            matchingEntries.push(entry);
+        }
+    });
+
+    if (matchingEntries.length === 1) {
+        // Single request - show detail directly
+        showTrafficDetail(matchingEntries[0].id);
+        return;
+    }
+
+    // Multiple requests - show list
+    const content = document.getElementById('detail-content');
+    const requestsList = matchingEntries.map(entry => {
+        const status = entry.response ? entry.response.status : '-';
+        const statusClass = getStatusClass(status);
+        const method = entry.request.method;
+        const methodClass = `method-${method.toLowerCase()}`;
+        const time = entry.timing.completed
+            ? `${new Date(entry.timing.completed) - new Date(entry.timing.request_received)}ms`
+            : '-';
+        const size = entry.response ? formatSize(entry.response.body_size) : '-';
+        const query = entry.request.path.includes('?')
+            ? entry.request.path.substring(entry.request.path.indexOf('?'))
+            : '';
+        const timestamp = new Date(entry.timing.request_received).toLocaleTimeString();
+
+        return `
+            <div class="path-request-item" onclick="showTrafficDetail('${entry.id}')">
+                <span class="status ${statusClass}">${status}</span>
+                <span class="${methodClass}">${method}</span>
+                <span class="path-query">${escapeHtml(query || '/')}</span>
+                <span class="path-size">${size}</span>
+                <span class="path-time">${time}</span>
+                <span class="path-timestamp">${timestamp}</span>
+            </div>
+        `;
+    }).join('');
+
+    content.innerHTML = `
+        <div class="detail-section">
+            <h3>${escapeHtml(host)}${escapeHtml(pathWithoutQuery)}</h3>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">${matchingEntries.length} requests</p>
+            <div class="path-requests-list">
+                ${requestsList}
+            </div>
         </div>
     `;
 
