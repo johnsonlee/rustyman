@@ -26,12 +26,18 @@
             <!-- Traffic Tab -->
             <div id="traffic-tab" class="tab-content active">
                 <div class="toolbar">
-                    <input type="text" id="search-input" placeholder="Search URL (regex supported)..." class="search-input">
+                    <div class="view-tabs">
+                        <button class="view-tab active" data-view="list">List</button>
+                        <button class="view-tab" data-view="tree">Tree</button>
+                    </div>
+                    <input type="text" id="search-input" placeholder="Filter by URL, host, method..." class="search-input">
                     <div class="stats">
                         <span id="traffic-count">0</span> requests
                     </div>
                 </div>
-                <div class="traffic-container">
+
+                <!-- List View -->
+                <div id="list-view" class="traffic-container view-container active">
                     <table class="traffic-table">
                         <thead>
                             <tr>
@@ -47,6 +53,11 @@
                         <tbody id="traffic-body">
                         </tbody>
                     </table>
+                </div>
+
+                <!-- Tree View -->
+                <div id="tree-view" class="traffic-container view-container">
+                    <div id="traffic-tree" class="traffic-tree"></div>
                 </div>
             </div>
 

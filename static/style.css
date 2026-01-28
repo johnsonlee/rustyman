@@ -141,15 +141,42 @@ body {
 /* Toolbar */
 .toolbar {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 1rem 2rem;
+    gap: 1rem;
+    padding: 0.75rem 2rem;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
 }
 
+.view-tabs {
+    display: flex;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.view-tab {
+    padding: 0.4rem 1rem;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.8125rem;
+    transition: all 0.2s;
+}
+
+.view-tab:hover {
+    color: var(--text-primary);
+}
+
+.view-tab.active {
+    background: var(--accent);
+    color: white;
+}
+
 .search-input {
-    width: 400px;
+    flex: 1;
+    max-width: 400px;
     padding: 0.5rem 1rem;
     background: var(--bg-primary);
     border: 1px solid var(--border);
@@ -166,6 +193,16 @@ body {
 .stats {
     color: var(--text-secondary);
     font-size: 0.875rem;
+    margin-left: auto;
+}
+
+/* View containers */
+.view-container {
+    display: none;
+}
+
+.view-container.active {
+    display: block;
 }
 
 /* Traffic Table */
@@ -468,6 +505,105 @@ body {
 .tag-modified {
     background: var(--warning);
     color: #000;
+}
+
+/* Tree View */
+.traffic-tree {
+    padding: 0.5rem;
+}
+
+.tree-host {
+    margin-bottom: 0.25rem;
+}
+
+.tree-host-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: background 0.2s;
+}
+
+.tree-host-header:hover {
+    background: var(--bg-tertiary);
+}
+
+.tree-host-header .expand-icon {
+    width: 16px;
+    color: var(--text-secondary);
+    transition: transform 0.2s;
+}
+
+.tree-host.expanded .expand-icon {
+    transform: rotate(90deg);
+}
+
+.tree-host-name {
+    font-weight: 500;
+    color: var(--accent);
+}
+
+.tree-host-count {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    margin-left: auto;
+}
+
+.tree-items {
+    display: none;
+    margin-left: 1.5rem;
+    border-left: 1px solid var(--border);
+}
+
+.tree-host.expanded .tree-items {
+    display: block;
+}
+
+.tree-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 1rem;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.tree-item:hover {
+    background: var(--bg-secondary);
+}
+
+.tree-item .status {
+    min-width: 40px;
+    text-align: center;
+}
+
+.tree-item .method {
+    min-width: 50px;
+}
+
+.tree-item .path {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+.tree-item .time {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+/* Hidden rows for filtering */
+.traffic-table tr.hidden,
+.tree-host.hidden,
+.tree-item.hidden {
+    display: none;
 }
 
 /* Scrollbar */

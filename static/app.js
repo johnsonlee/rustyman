@@ -2,10 +2,13 @@
 let trafficEntries = new Map();
 let eventSource = null;
 let currentRuleType = null;
+let currentView = 'list';
+let currentFilter = '';
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initTabs();
+    initViewTabs();
     initEventStream();
     loadInitialData();
     initEventListeners();
@@ -29,6 +32,28 @@ function initTabs() {
                 loadRules();
             } else if (tab.dataset.tab === 'settings') {
                 loadStats();
+            }
+        });
+    });
+}
+
+// View tabs (List/Tree)
+function initViewTabs() {
+    const viewTabs = document.querySelectorAll('.view-tab');
+    viewTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            viewTabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+
+            currentView = tab.dataset.view;
+
+            const viewContainers = document.querySelectorAll('.view-container');
+            viewContainers.forEach(vc => vc.classList.remove('active'));
+
+            document.getElementById(`${currentView}-view`).classList.add('active');
+
+            if (currentView === 'tree') {
+                renderTreeView();
             }
         });
     });
@@ -84,11 +109,16 @@ function handleTrafficEvent(event) {
         case 'completed':
             trafficEntries.set(data.id, data);
             updateTrafficRow(data);
+            if (currentView === 'tree') {
+                renderTreeView();
+            }
+            applyFilter();
             updateTrafficCount();
             break;
         case 'cleared':
             trafficEntries.clear();
             document.getElementById('traffic-body').innerHTML = '';
+            document.getElementById('traffic-tree').innerHTML = '';
             updateTrafficCount();
             break;
     }
@@ -159,13 +189,14 @@ function updateTrafficCount() {
 // Load initial data
 async function loadInitialData() {
     try {
-        const response = await fetch('/api/traffic?limit=100');
+        const response = await fetch('/api/traffic?limit=500');
         const data = await response.json();
         if (data.success && data.data) {
             data.data.forEach(entry => {
                 trafficEntries.set(entry.id, entry);
                 updateTrafficRow(entry);
             });
+            renderTreeView();
             updateTrafficCount();
         }
     } catch (error) {
@@ -182,33 +213,156 @@ function initEventListeners() {
         }
     });
 
-    // Search
-    let searchTimeout;
+    // Real-time filter
     document.getElementById('search-input').addEventListener('input', (e) => {
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => searchTraffic(e.target.value), 300);
+        currentFilter = e.target.value.toLowerCase();
+        applyFilter();
     });
 }
 
-// Search traffic
-async function searchTraffic(query) {
-    if (!query) {
-        // Reload all traffic
-        document.getElementById('traffic-body').innerHTML = '';
-        trafficEntries.forEach(entry => updateTrafficRow(entry));
+// Apply filter to current view
+function applyFilter() {
+    if (currentView === 'list') {
+        applyListFilter();
+    } else {
+        applyTreeFilter();
+    }
+    updateFilteredCount();
+}
+
+// Apply filter to list view
+function applyListFilter() {
+    const rows = document.querySelectorAll('#traffic-body tr');
+    rows.forEach(row => {
+        const id = row.id.replace('row-', '');
+        const entry = trafficEntries.get(id);
+        if (entry && matchesFilter(entry)) {
+            row.classList.remove('hidden');
+        } else {
+            row.classList.add('hidden');
+        }
+    });
+}
+
+// Apply filter to tree view
+function applyTreeFilter() {
+    const hosts = document.querySelectorAll('.tree-host');
+    hosts.forEach(hostEl => {
+        const items = hostEl.querySelectorAll('.tree-item');
+        let visibleCount = 0;
+
+        items.forEach(item => {
+            const id = item.dataset.id;
+            const entry = trafficEntries.get(id);
+            if (entry && matchesFilter(entry)) {
+                item.classList.remove('hidden');
+                visibleCount++;
+            } else {
+                item.classList.add('hidden');
+            }
+        });
+
+        if (visibleCount > 0) {
+            hostEl.classList.remove('hidden');
+            hostEl.querySelector('.tree-host-count').textContent = `${visibleCount} requests`;
+        } else {
+            hostEl.classList.add('hidden');
+        }
+    });
+}
+
+// Check if entry matches filter
+function matchesFilter(entry) {
+    if (!currentFilter) return true;
+
+    const searchText = [
+        entry.request.url,
+        entry.request.host,
+        entry.request.path,
+        entry.request.method,
+        entry.response?.status?.toString() || ''
+    ].join(' ').toLowerCase();
+
+    // Support simple regex or plain text
+    try {
+        const regex = new RegExp(currentFilter, 'i');
+        return regex.test(searchText);
+    } catch {
+        return searchText.includes(currentFilter);
+    }
+}
+
+// Update filtered count
+function updateFilteredCount() {
+    if (!currentFilter) {
+        document.getElementById('traffic-count').textContent = trafficEntries.size;
         return;
     }
 
-    try {
-        const response = await fetch(`/api/traffic/search?q=${encodeURIComponent(query)}`);
-        const data = await response.json();
-        if (data.success && data.data) {
-            document.getElementById('traffic-body').innerHTML = '';
-            data.data.forEach(entry => updateTrafficRow(entry));
+    let count = 0;
+    trafficEntries.forEach(entry => {
+        if (matchesFilter(entry)) count++;
+    });
+    document.getElementById('traffic-count').textContent = `${count}/${trafficEntries.size}`;
+}
+
+// Render tree view
+function renderTreeView() {
+    const treeContainer = document.getElementById('traffic-tree');
+
+    // Group by host
+    const hostGroups = new Map();
+    trafficEntries.forEach(entry => {
+        const host = entry.request.host;
+        if (!hostGroups.has(host)) {
+            hostGroups.set(host, []);
         }
-    } catch (error) {
-        console.error('Search failed:', error);
-    }
+        hostGroups.get(host).push(entry);
+    });
+
+    // Sort hosts alphabetically
+    const sortedHosts = Array.from(hostGroups.keys()).sort();
+
+    treeContainer.innerHTML = sortedHosts.map(host => {
+        const entries = hostGroups.get(host);
+        const items = entries.map(entry => {
+            const status = entry.response ? entry.response.status : '-';
+            const statusClass = getStatusClass(status);
+            const methodClass = `method-${entry.request.method.toLowerCase()}`;
+            const time = entry.timing.completed
+                ? `${new Date(entry.timing.completed) - new Date(entry.timing.request_received)}ms`
+                : '-';
+
+            return `
+                <div class="tree-item" data-id="${entry.id}" onclick="showTrafficDetail('${entry.id}')">
+                    <span class="status ${statusClass}">${status}</span>
+                    <span class="method ${methodClass}">${entry.request.method}</span>
+                    <span class="path">${escapeHtml(entry.request.path)}</span>
+                    <span class="time">${time}</span>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="tree-host" data-host="${escapeHtml(host)}">
+                <div class="tree-host-header" onclick="toggleTreeHost(this.parentElement)">
+                    <span class="expand-icon">▶</span>
+                    <span class="tree-host-name">${escapeHtml(host)}</span>
+                    <span class="tree-host-count">${entries.length} requests</span>
+                </div>
+                <div class="tree-items">
+                    ${items}
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    applyTreeFilter();
+}
+
+// Toggle tree host expand/collapse
+function toggleTreeHost(hostEl) {
+    hostEl.classList.toggle('expanded');
 }
 
 // Show traffic detail
