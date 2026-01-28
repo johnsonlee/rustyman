@@ -4,6 +4,7 @@ let eventSource = null;
 let currentRuleType = null;
 let currentView = 'list';
 let currentFilter = '';
+let expandedNodes = new Set(); // Track expanded tree nodes
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -262,6 +263,26 @@ function applyTreeFilter() {
             }
         });
 
+        // Update node counts based on visible items
+        const nodes = hostEl.querySelectorAll('.tree-node');
+        nodes.forEach(node => {
+            const nodeItems = node.querySelectorAll(':scope > .tree-node-children > .tree-item:not(.hidden)');
+            const childNodes = node.querySelectorAll(':scope > .tree-node-children > .tree-node:not(.hidden)');
+            const nodeCount = node.querySelector('.tree-node-count');
+
+            // Count visible items in this node and descendants
+            const allItems = node.querySelectorAll('.tree-item:not(.hidden)');
+            if (nodeCount) {
+                nodeCount.textContent = allItems.length;
+            }
+
+            if (allItems.length > 0) {
+                node.classList.remove('hidden');
+            } else {
+                node.classList.add('hidden');
+            }
+        });
+
         if (visibleCount > 0) {
             hostEl.classList.remove('hidden');
             hostEl.querySelector('.tree-host-count').textContent = `${visibleCount} requests`;
@@ -306,6 +327,120 @@ function updateFilteredCount() {
     document.getElementById('traffic-count').textContent = `${count}/${trafficEntries.size}`;
 }
 
+// Build hierarchical path tree
+function buildPathTree(entries) {
+    const tree = {};
+
+    entries.forEach(entry => {
+        const path = entry.request.path || '/';
+        // Split path into segments, filter empty ones
+        const segments = path.split('/').filter(s => s);
+
+        let current = tree;
+        let currentPath = '';
+
+        segments.forEach((segment, index) => {
+            currentPath += '/' + segment;
+            if (!current[segment]) {
+                current[segment] = {
+                    _path: currentPath,
+                    _entries: [],
+                    _children: {}
+                };
+            }
+            // If last segment, add the entry
+            if (index === segments.length - 1) {
+                current[segment]._entries.push(entry);
+            }
+            current = current[segment]._children;
+        });
+
+        // Handle root path requests
+        if (segments.length === 0) {
+            if (!tree['']) {
+                tree[''] = { _path: '/', _entries: [], _children: {} };
+            }
+            tree['']._entries.push(entry);
+        }
+    });
+
+    return tree;
+}
+
+// Count all entries in a tree node (including children)
+function countTreeEntries(node) {
+    let count = node._entries ? node._entries.length : 0;
+    if (node._children) {
+        Object.values(node._children).forEach(child => {
+            count += countTreeEntries(child);
+        });
+    }
+    return count;
+}
+
+// Render a tree node recursively
+function renderTreeNode(name, node, hostKey, depth = 0) {
+    const nodeKey = `${hostKey}:${node._path || '/'}`;
+    const isExpanded = expandedNodes.has(nodeKey);
+    const entries = node._entries || [];
+    const children = node._children || {};
+    const childKeys = Object.keys(children).sort();
+    const totalCount = countTreeEntries(node);
+    const hasChildren = childKeys.length > 0 || entries.length > 0;
+
+    if (!hasChildren) return '';
+
+    const displayName = name || '/';
+    const indent = depth * 16;
+
+    // Render entries at this level
+    const entryItems = entries.map(entry => {
+        const status = entry.response ? entry.response.status : '-';
+        const statusClass = getStatusClass(status);
+        const methodClass = `method-${entry.request.method.toLowerCase()}`;
+        const time = entry.timing.completed
+            ? `${new Date(entry.timing.completed) - new Date(entry.timing.request_received)}ms`
+            : '-';
+        const query = entry.request.path.includes('?')
+            ? entry.request.path.substring(entry.request.path.indexOf('?'))
+            : '';
+
+        return `
+            <div class="tree-item" data-id="${entry.id}" onclick="showTrafficDetail('${entry.id}')" style="padding-left: ${indent + 24}px;">
+                <span class="status ${statusClass}">${status}</span>
+                <span class="method ${methodClass}">${entry.request.method}</span>
+                <span class="path">${escapeHtml(query || '(request)')}</span>
+                <span class="time">${time}</span>
+            </div>
+        `;
+    }).join('');
+
+    // Render child nodes
+    const childItems = childKeys.map(key =>
+        renderTreeNode(key, children[key], hostKey, depth + 1)
+    ).join('');
+
+    // If this is a path segment node (not the implicit root)
+    if (name !== null) {
+        return `
+            <div class="tree-node ${isExpanded ? 'expanded' : ''}" data-key="${escapeHtml(nodeKey)}">
+                <div class="tree-node-header" onclick="toggleTreeNode('${escapeHtml(nodeKey)}')" style="padding-left: ${indent}px;">
+                    <span class="expand-icon">▶</span>
+                    <span class="tree-node-name">/${escapeHtml(displayName)}</span>
+                    <span class="tree-node-count">${totalCount}</span>
+                </div>
+                <div class="tree-node-children">
+                    ${entryItems}
+                    ${childItems}
+                </div>
+            </div>
+        `;
+    }
+
+    // Implicit root - just return children
+    return entryItems + childItems;
+}
+
 // Render tree view
 function renderTreeView() {
     const treeContainer = document.getElementById('traffic-tree');
@@ -325,33 +460,26 @@ function renderTreeView() {
 
     treeContainer.innerHTML = sortedHosts.map(host => {
         const entries = hostGroups.get(host);
-        const items = entries.map(entry => {
-            const status = entry.response ? entry.response.status : '-';
-            const statusClass = getStatusClass(status);
-            const methodClass = `method-${entry.request.method.toLowerCase()}`;
-            const time = entry.timing.completed
-                ? `${new Date(entry.timing.completed) - new Date(entry.timing.request_received)}ms`
-                : '-';
+        const hostKey = `host:${host}`;
+        const isExpanded = expandedNodes.has(hostKey);
 
-            return `
-                <div class="tree-item" data-id="${entry.id}" onclick="showTrafficDetail('${entry.id}')">
-                    <span class="status ${statusClass}">${status}</span>
-                    <span class="method ${methodClass}">${entry.request.method}</span>
-                    <span class="path">${escapeHtml(entry.request.path)}</span>
-                    <span class="time">${time}</span>
-                </div>
-            `;
-        }).join('');
+        // Build path tree for this host
+        const pathTree = buildPathTree(entries);
+
+        // Render path tree
+        const pathItems = Object.keys(pathTree).sort().map(key =>
+            renderTreeNode(key, pathTree[key], host, 1)
+        ).join('');
 
         return `
-            <div class="tree-host" data-host="${escapeHtml(host)}">
-                <div class="tree-host-header" onclick="toggleTreeHost(this.parentElement)">
+            <div class="tree-host ${isExpanded ? 'expanded' : ''}" data-host="${escapeHtml(host)}" data-key="${escapeHtml(hostKey)}">
+                <div class="tree-host-header" onclick="toggleTreeNode('${escapeHtml(hostKey)}')">
                     <span class="expand-icon">▶</span>
                     <span class="tree-host-name">${escapeHtml(host)}</span>
                     <span class="tree-host-count">${entries.length} requests</span>
                 </div>
                 <div class="tree-items">
-                    ${items}
+                    ${pathItems}
                 </div>
             </div>
         `;
@@ -360,9 +488,28 @@ function renderTreeView() {
     applyTreeFilter();
 }
 
-// Toggle tree host expand/collapse
+// Toggle tree node expand/collapse
+function toggleTreeNode(nodeKey) {
+    if (expandedNodes.has(nodeKey)) {
+        expandedNodes.delete(nodeKey);
+    } else {
+        expandedNodes.add(nodeKey);
+    }
+
+    // Update DOM directly without full re-render
+    const selector = `[data-key="${CSS.escape(nodeKey)}"]`;
+    const el = document.querySelector(selector);
+    if (el) {
+        el.classList.toggle('expanded');
+    }
+}
+
+// Keep old function for compatibility
 function toggleTreeHost(hostEl) {
-    hostEl.classList.toggle('expanded');
+    const key = hostEl.dataset.key;
+    if (key) {
+        toggleTreeNode(key);
+    }
 }
 
 // Show traffic detail

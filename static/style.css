@@ -555,8 +555,7 @@ body {
 
 .tree-items {
     display: none;
-    margin-left: 1.5rem;
-    border-left: 1px solid var(--border);
+    padding-left: 0.5rem;
 }
 
 .tree-host.expanded .tree-items {
@@ -599,9 +598,65 @@ body {
     font-size: 0.75rem;
 }
 
+/* Tree node (path segments) */
+.tree-node {
+    margin-left: 0;
+}
+
+.tree-node-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 1rem;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    transition: background 0.2s;
+    border-radius: 3px;
+}
+
+.tree-node-header:hover {
+    background: var(--bg-secondary);
+}
+
+.tree-node-header .expand-icon {
+    width: 12px;
+    font-size: 0.625rem;
+    color: var(--text-secondary);
+    transition: transform 0.2s;
+}
+
+.tree-node.expanded > .tree-node-header .expand-icon {
+    transform: rotate(90deg);
+}
+
+.tree-node-name {
+    color: var(--text-primary);
+    font-family: monospace;
+}
+
+.tree-node-count {
+    color: var(--text-secondary);
+    font-size: 0.6875rem;
+    margin-left: auto;
+    background: var(--bg-tertiary);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+}
+
+.tree-node-children {
+    display: none;
+    margin-left: 0.5rem;
+    border-left: 1px dashed var(--border);
+}
+
+.tree-node.expanded > .tree-node-children {
+    display: block;
+}
+
 /* Hidden rows for filtering */
 .traffic-table tr.hidden,
 .tree-host.hidden,
+.tree-node.hidden,
 .tree-item.hidden {
     display: none;
 }
