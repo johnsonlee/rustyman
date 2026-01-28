@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
@@ -34,7 +35,7 @@ impl WebServer {
     }
 
     /// Start the web server
-    pub async fn run(&self, host: &str, port: u16) -> Result<(), WebError> {
+    pub async fn run(&self, host: &str, port: u16, cancel_token: CancellationToken) -> Result<(), WebError> {
         let addr: SocketAddr = format!("{}:{}", host, port)
             .parse()
             .map_err(|e| WebError::ServerError(format!("Invalid address: {}", e)))?;
@@ -77,9 +78,14 @@ impl WebServer {
         info!("Web UI listening on http://{}", addr);
 
         axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                cancel_token.cancelled().await;
+                info!("Web UI shutting down...");
+            })
             .await
             .map_err(|e| WebError::ServerError(e.to_string()))?;
 
+        info!("Web UI stopped");
         Ok(())
     }
 }

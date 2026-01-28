@@ -12,6 +12,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 #[derive(Error, Debug)]
@@ -84,7 +85,7 @@ impl ProxyServer {
     }
 
     /// Start the proxy server
-    pub async fn run(&self) -> Result<(), ProxyError> {
+    pub async fn run(&self, cancel_token: CancellationToken) -> Result<(), ProxyError> {
         let config = self.state.config.read().await;
         let addr: SocketAddr = format!("{}:{}", config.proxy.host, config.proxy.port)
             .parse()
@@ -95,20 +96,37 @@ impl ProxyServer {
         info!("Proxy server listening on {}", addr);
 
         loop {
-            match listener.accept().await {
-                Ok((stream, client_addr)) => {
-                    let state = Arc::clone(&self.state);
-                    tokio::spawn(async move {
-                        let handler = ProxyHandler::new(state, client_addr);
-                        if let Err(e) = handler.handle(stream).await {
-                            error!("Error handling connection from {}: {}", client_addr, e);
-                        }
-                    });
+            tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    info!("Proxy server shutting down...");
+                    break;
                 }
-                Err(e) => {
-                    error!("Failed to accept connection: {}", e);
+                result = listener.accept() => {
+                    match result {
+                        Ok((stream, client_addr)) => {
+                            let state = Arc::clone(&self.state);
+                            let token = cancel_token.clone();
+                            tokio::spawn(async move {
+                                let handler = ProxyHandler::new(state, client_addr);
+                                tokio::select! {
+                                    _ = token.cancelled() => {}
+                                    result = handler.handle(stream) => {
+                                        if let Err(e) = result {
+                                            error!("Error handling connection from {}: {}", client_addr, e);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to accept connection: {}", e);
+                        }
+                    }
                 }
             }
         }
+
+        info!("Proxy server stopped");
+        Ok(())
     }
 }

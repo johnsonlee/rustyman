@@ -5,6 +5,7 @@ use rustyman::proxy::ProxyServer;
 use rustyman::web::WebServer;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -145,23 +146,29 @@ async fn main() -> anyhow::Result<()> {
 
     info!("CA certificate loaded/generated");
 
+    // Create cancellation token for graceful shutdown
+    let cancel_token = CancellationToken::new();
+
     // Create proxy server
     let proxy = ProxyServer::new(config.clone(), ca)?;
     let state = proxy.state();
 
     // Start web UI if enabled
-    if config.web_ui.enabled {
+    let web_handle = if config.web_ui.enabled {
         let web_host = config.web_ui.host.clone();
         let web_port = config.web_ui.port;
         let web_state = Arc::clone(&state);
+        let web_token = cancel_token.clone();
 
-        tokio::spawn(async move {
+        Some(tokio::spawn(async move {
             let web_server = WebServer::new(web_state);
-            if let Err(e) = web_server.run(&web_host, web_port).await {
+            if let Err(e) = web_server.run(&web_host, web_port, web_token).await {
                 error!("Web UI error: {}", e);
             }
-        });
-    }
+        }))
+    } else {
+        None
+    };
 
     // Print startup info
     println!();
@@ -190,12 +197,30 @@ async fn main() -> anyhow::Result<()> {
     println!("║  To trust the CA certificate:                         ║");
     println!("║  1. Download from Web UI or use --export-ca           ║");
     println!("║  2. Install to your system/browser trust store        ║");
+    println!("║  Press Ctrl+C to stop the proxy                       ║");
     println!("╚═══════════════════════════════════════════════════════╝");
     println!();
 
-    // Run proxy server
-    proxy.run().await?;
+    // Spawn signal handler
+    let shutdown_token = cancel_token.clone();
+    tokio::spawn(async move {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            error!("Failed to listen for Ctrl+C: {}", e);
+            return;
+        }
+        info!("Received Ctrl+C, initiating graceful shutdown...");
+        shutdown_token.cancel();
+    });
 
+    // Run proxy server
+    proxy.run(cancel_token.clone()).await?;
+
+    // Wait for web UI to finish if it was started
+    if let Some(handle) = web_handle {
+        let _ = handle.await;
+    }
+
+    info!("Rustyman stopped");
     Ok(())
 }
 
