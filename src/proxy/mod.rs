@@ -35,10 +35,11 @@ pub struct ProxyState {
     pub ca: Arc<CertificateAuthority>,
     pub rules: RwLock<RuleEngine>,
     pub traffic: Arc<TrafficStore>,
+    pub shutdown: CancellationToken,
 }
 
 impl ProxyState {
-    pub fn new(config: Config, ca: CertificateAuthority) -> Result<Self, ProxyError> {
+    pub fn new(config: Config, ca: CertificateAuthority, shutdown: CancellationToken) -> Result<Self, ProxyError> {
         let rules = RuleEngine::new(
             config.map_remote.clone(),
             config.map_local.clone(),
@@ -50,6 +51,7 @@ impl ProxyState {
             ca: Arc::new(ca),
             rules: RwLock::new(rules),
             traffic: Arc::new(TrafficStore::default()),
+            shutdown,
         })
     }
 
@@ -75,8 +77,8 @@ pub struct ProxyServer {
 }
 
 impl ProxyServer {
-    pub fn new(config: Config, ca: CertificateAuthority) -> Result<Self, ProxyError> {
-        let state = Arc::new(ProxyState::new(config, ca)?);
+    pub fn new(config: Config, ca: CertificateAuthority, shutdown: CancellationToken) -> Result<Self, ProxyError> {
+        let state = Arc::new(ProxyState::new(config, ca, shutdown)?);
         Ok(Self { state })
     }
 

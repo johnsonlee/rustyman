@@ -270,25 +270,33 @@ pub async fn traffic_events(
     State(state): State<Arc<ProxyState>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.traffic.subscribe();
+    let shutdown = state.shutdown.clone();
 
     let stream = stream! {
         loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if let Ok(json) = event.to_json() {
-                        let event_type = event.event_type();
-                        yield Ok(Event::default()
-                            .event(event_type)
-                            .data(json));
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    // Skip lagged messages, continue receiving
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    // Channel closed, exit the loop
+            tokio::select! {
+                _ = shutdown.cancelled() => {
                     break;
+                }
+                result = rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            if let Ok(json) = event.to_json() {
+                                let event_type = event.event_type();
+                                yield Ok(Event::default()
+                                    .event(event_type)
+                                    .data(json));
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // Skip lagged messages, continue receiving
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            // Channel closed, exit the loop
+                            break;
+                        }
+                    }
                 }
             }
         }

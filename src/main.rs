@@ -150,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
     let cancel_token = CancellationToken::new();
 
     // Create proxy server
-    let proxy = ProxyServer::new(config.clone(), ca)?;
+    let proxy = ProxyServer::new(config.clone(), ca, cancel_token.clone())?;
     let state = proxy.state();
 
     // Start web UI if enabled

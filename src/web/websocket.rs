@@ -26,40 +26,48 @@ async fn handle_socket(socket: WebSocket, state: Arc<ProxyState>) {
 
     // Subscribe to traffic events
     let mut rx = state.traffic.subscribe();
+    let shutdown = state.shutdown.clone();
 
     // Spawn task to send traffic events to client
     let send_task = tokio::spawn(async move {
         loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    let ws_event = match event {
-                        TrafficEvent::NewRequest(entry) => WsEvent {
-                            event_type: "new_request".to_string(),
-                            data: serde_json::to_value(&entry).unwrap_or_default(),
-                        },
-                        TrafficEvent::ResponseReceived(entry) => WsEvent {
-                            event_type: "response_received".to_string(),
-                            data: serde_json::to_value(&entry).unwrap_or_default(),
-                        },
-                        TrafficEvent::Completed(entry) => WsEvent {
-                            event_type: "completed".to_string(),
-                            data: serde_json::to_value(&entry).unwrap_or_default(),
-                        },
-                        TrafficEvent::Cleared => WsEvent {
-                            event_type: "cleared".to_string(),
-                            data: serde_json::Value::Null,
-                        },
-                    };
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    break;
+                }
+                result = rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            let ws_event = match event {
+                                TrafficEvent::NewRequest(entry) => WsEvent {
+                                    event_type: "new_request".to_string(),
+                                    data: serde_json::to_value(&entry).unwrap_or_default(),
+                                },
+                                TrafficEvent::ResponseReceived(entry) => WsEvent {
+                                    event_type: "response_received".to_string(),
+                                    data: serde_json::to_value(&entry).unwrap_or_default(),
+                                },
+                                TrafficEvent::Completed(entry) => WsEvent {
+                                    event_type: "completed".to_string(),
+                                    data: serde_json::to_value(&entry).unwrap_or_default(),
+                                },
+                                TrafficEvent::Cleared => WsEvent {
+                                    event_type: "cleared".to_string(),
+                                    data: serde_json::Value::Null,
+                                },
+                            };
 
-                    if let Ok(json) = serde_json::to_string(&ws_event) {
-                        if sender.send(Message::Text(json.into())).await.is_err() {
-                            break;
+                            if let Ok(json) = serde_json::to_string(&ws_event) {
+                                if sender.send(Message::Text(json.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            // Channel lagged, skip some messages
+                            debug!("WebSocket receiver lagged: {}", e);
                         }
                     }
-                }
-                Err(e) => {
-                    // Channel lagged, skip some messages
-                    debug!("WebSocket receiver lagged: {}", e);
                 }
             }
         }
