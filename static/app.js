@@ -397,19 +397,22 @@ function renderTreeNode(name, node, hostKey, depth = 0) {
     const entryItems = entries.map(entry => {
         const status = entry.response ? entry.response.status : '-';
         const statusClass = getStatusClass(status);
-        const methodClass = `method-${entry.request.method.toLowerCase()}`;
         const time = entry.timing.completed
             ? `${new Date(entry.timing.completed) - new Date(entry.timing.request_received)}ms`
             : '-';
         const query = entry.request.path.includes('?')
             ? entry.request.path.substring(entry.request.path.indexOf('?'))
             : '';
+        const size = entry.response ? formatSize(entry.response.body_size) : '-';
+        const contentType = entry.response?.headers['content-type'] || '';
+        const shortType = contentType.split(';')[0].split('/').pop() || '-';
 
         return `
             <div class="tree-item" data-id="${entry.id}" onclick="showTrafficDetail('${entry.id}')" style="padding-left: ${indent + 24}px;">
                 <span class="status ${statusClass}">${status}</span>
-                <span class="method ${methodClass}">${entry.request.method}</span>
-                <span class="path">${escapeHtml(query || '(request)')}</span>
+                <span class="tree-query">${escapeHtml(query || '')}</span>
+                <span class="tree-type">${shortType}</span>
+                <span class="tree-size">${size}</span>
                 <span class="time">${time}</span>
             </div>
         `;
