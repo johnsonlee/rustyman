@@ -581,35 +581,10 @@ body {
     text-align: center;
 }
 
-.tree-item .tree-query {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+.tree-item .tree-label {
     color: var(--text-secondary);
     font-family: monospace;
     font-size: 0.75rem;
-}
-
-.tree-item .tree-type {
-    color: var(--text-secondary);
-    font-size: 0.6875rem;
-    min-width: 50px;
-    text-align: right;
-}
-
-.tree-item .tree-size {
-    color: var(--text-secondary);
-    font-size: 0.6875rem;
-    min-width: 50px;
-    text-align: right;
-}
-
-.tree-item .time {
-    color: var(--text-secondary);
-    font-size: 0.6875rem;
-    min-width: 45px;
-    text-align: right;
 }
 
 /* Tree node (path segments) */
