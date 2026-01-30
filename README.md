@@ -1,14 +1,39 @@
 # Rustyman
 
-A high-performance MITM (Man-In-The-Middle) proxy written in Rust, inspired by [mitmproxy](https://mitmproxy.org/).
+A high-performance MITM (Man-In-The-Middle) proxy written in Rust — the core infrastructure for **feedback loop driven AI-assisted engineering**.
+
+## Why Rustyman
+
+Rustyman is not a Rust rewrite of [mitmproxy](https://mitmproxy.org/). It is purpose-built infrastructure that enables AI agents to participate in a closed-loop engineering workflow.
+
+In AI-assisted engineering, the AI agent needs to **observe** real HTTP traffic as feedback to make decisions. Rustyman provides:
+
+- **A programmable control plane** — REST API for AI agents to configure mock rules, redirect traffic, and rewrite headers at runtime, without human intervention.
+- **A structured observation channel** — SSE real-time event stream (`/api/events`) delivers machine-readable traffic events, enabling AI agents to verify whether requests were sent, responses matched expectations, and status codes are correct.
+- **Frictionless automation** — Single binary with zero runtime dependencies. CI/CD pipelines and AI-driven test workflows can spin up a proxy instance, run tests, collect feedback, and tear it down with no environment setup.
+- **Declarative configuration** — YAML-based rules that are machine-writable and version-controllable.
+
+```
+AI Agent
+  │
+  ├──▶ Configure rules (REST API)     ← Control plane
+  ├──▶ Trigger tests                   ← Execution
+  ├──◀ SSE real-time traffic events    ← Observation / Feedback
+  └──▶ Adjust based on feedback        ← Closed-loop iteration
+```
+
+mitmproxy is designed for humans — TUI interaction, Python scripting, manual inspection. Rustyman is designed for **AI agents as first-class consumers**.
 
 ## Features
 
 - **HTTP/HTTPS Proxy with MITM** - Intercept and inspect encrypted HTTPS traffic
+- **REST API** - Programmable control plane for automated rule management
+- **SSE Event Stream** - Real-time, machine-readable traffic observation for AI feedback loops
 - **Map Remote** - Redirect requests to different servers using regex patterns
 - **Map Local** - Serve local files for matching requests
 - **Header Rewrite** - Add, remove, or modify HTTP headers with regex support
-- **YAML Configuration** - Easy-to-read configuration format
+- **YAML Configuration** - Declarative, machine-writable configuration format
+- **Single Binary** - Zero runtime dependencies, CI/CD friendly
 - **Web UI** - Real-time traffic monitoring and rule management
 - **CLI** - Command-line interface with logging options
 
@@ -348,8 +373,9 @@ Firefox uses its own certificate store:
               ┌──────────────────┴──────────────────┴──────────────────┐
               ▼                         ▼                              ▼
         ┌───────────┐            ┌───────────┐                  ┌───────────┐
-        │  Browser  │            │   curl    │                  │  Scripts  │
-        └───────────┘            └───────────┘                  └───────────┘
+        │  Browser  │            │ AI Agent  │                  │ CI / CD   │
+        └───────────┘            │ (primary) │                  │ Pipeline  │
+                                 └───────────┘                  └───────────┘
 ```
 
 ## Development

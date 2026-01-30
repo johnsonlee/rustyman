@@ -4,7 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-Rustyman is a high-performance MITM (Man-In-The-Middle) HTTP/HTTPS proxy written in Rust, inspired by mitmproxy. It allows developers to intercept, inspect, and modify HTTP/HTTPS traffic for debugging and testing purposes.
+Rustyman is a high-performance MITM (Man-In-The-Middle) HTTP/HTTPS proxy written in Rust — the core infrastructure for **feedback loop driven AI-assisted engineering**.
+
+### Why Rustyman Exists
+
+Rustyman is not "a faster mitmproxy." It is purpose-built infrastructure that enables AI agents to participate in a closed-loop engineering workflow: **configure → execute → observe → adjust**. The entire architecture serves this feedback loop:
+
+- **REST API** — the control plane for AI agents to programmatically set up mock rules (Map Local), redirect traffic (Map Remote), rewrite headers, and query traffic records, all without human intervention.
+- **SSE real-time event stream** (`/api/events`) — the observation channel. The primary consumer is not a human watching a browser, but an AI agent that needs structured, machine-readable feedback on HTTP traffic (request sent? response correct? status code? headers?) to decide its next action.
+- **Single binary, zero dependencies** — designed for frictionless integration into CI/CD pipelines and automated test environments. An AI-driven workflow can spin up a proxy instance, run tests, collect feedback, and tear it down with no environment setup.
+- **Declarative YAML configuration** — machine-writable, version-controllable, no imperative scripting required.
+
+```
+AI Agent
+  │
+  ├──▶ Configure rules (REST API)     ← Control plane
+  ├──▶ Trigger tests                   ← Execution
+  ├──◀ SSE real-time traffic events    ← Observation / Feedback
+  └──▶ Adjust based on feedback        ← Closed-loop iteration
+```
+
+### How This Differs from mitmproxy
+
+mitmproxy is designed for humans — TUI interaction, Python scripting, manual inspection. Rustyman is designed for **AI agents as first-class consumers**: machine-readable APIs, structured event streams, declarative configuration, and stateless deployment. This is the fundamental difference.
 
 ## Build Commands
 
