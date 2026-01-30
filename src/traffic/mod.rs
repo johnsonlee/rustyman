@@ -45,6 +45,8 @@ impl TrafficStore {
             timing: TimingInfo::new(),
             tags: Vec::new(),
             matched_rules: Vec::new(),
+            is_websocket: false,
+            websocket_messages: None,
         };
 
         self.entries.insert(id.clone(), entry.clone());
@@ -153,6 +155,60 @@ impl TrafficStore {
         }
     }
 
+    /// Create a new traffic entry for a WebSocket connection
+    pub fn create_websocket_entry(&self, request: RequestInfo) -> String {
+        let id = Uuid::new_v4().to_string();
+        let order = self.counter.fetch_add(1, Ordering::SeqCst);
+
+        let entry = TrafficEntry {
+            id: id.clone(),
+            order,
+            request,
+            response: None,
+            timing: TimingInfo::new(),
+            tags: vec!["websocket".to_string()],
+            matched_rules: Vec::new(),
+            is_websocket: true,
+            websocket_messages: Some(Vec::new()),
+        };
+
+        self.entries.insert(id.clone(), entry.clone());
+        self.entry_order.insert(order, id.clone());
+
+        self.cleanup_old_entries();
+
+        let _ = self.tx.send(TrafficEvent::NewRequest(entry));
+
+        id
+    }
+
+    /// Record a WebSocket message on an existing entry
+    pub fn record_websocket_message(
+        &self,
+        id: &str,
+        message: WebSocketMessageInfo,
+        max_messages: usize,
+    ) {
+        let should_broadcast = if let Some(mut entry) = self.entries.get_mut(id) {
+            let messages = entry.websocket_messages.get_or_insert_with(Vec::new);
+            if messages.len() < max_messages {
+                messages.push(message.clone());
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if should_broadcast {
+            let _ = self.tx.send(TrafficEvent::WebSocketMessage {
+                entry_id: id.to_string(),
+                message,
+            });
+        }
+    }
+
     /// Search entries by URL pattern
     pub fn search(&self, pattern: &str) -> Vec<TrafficEntry> {
         let regex = regex::Regex::new(pattern).ok();
@@ -194,6 +250,12 @@ pub struct TrafficEntry {
     pub tags: Vec<String>,
     /// Rules that matched this request
     pub matched_rules: Vec<MatchedRule>,
+    /// Whether this entry is a WebSocket connection
+    #[serde(default)]
+    pub is_websocket: bool,
+    /// WebSocket messages exchanged on this connection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket_messages: Option<Vec<WebSocketMessageInfo>>,
 }
 
 /// HTTP request information
@@ -281,6 +343,41 @@ pub struct MatchedRule {
     pub rule_name: String,
 }
 
+/// WebSocket message direction
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSocketDirection {
+    ClientToServer,
+    ServerToClient,
+}
+
+/// WebSocket message type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSocketMessageType {
+    Text,
+    Binary,
+    Ping,
+    Pong,
+    Close,
+}
+
+/// WebSocket message information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSocketMessageInfo {
+    /// When the message was observed
+    pub timestamp: DateTime<Utc>,
+    /// Direction of the message
+    pub direction: WebSocketDirection,
+    /// Type of WebSocket message
+    pub message_type: WebSocketMessageType,
+    /// Payload content (text as UTF-8, binary as base64)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<String>,
+    /// Payload size in bytes
+    pub payload_size: usize,
+}
+
 /// Traffic events for real-time updates
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", content = "data")]
@@ -293,6 +390,11 @@ pub enum TrafficEvent {
     Completed(TrafficEntry),
     #[serde(rename = "cleared")]
     Cleared,
+    #[serde(rename = "websocket_message")]
+    WebSocketMessage {
+        entry_id: String,
+        message: WebSocketMessageInfo,
+    },
 }
 
 impl TrafficEvent {
@@ -313,6 +415,7 @@ impl TrafficEvent {
             TrafficEvent::ResponseReceived(_) => "response",
             TrafficEvent::Completed(_) => "completed",
             TrafficEvent::Cleared => "cleared",
+            TrafficEvent::WebSocketMessage { .. } => "websocket_message",
         }
     }
 
@@ -323,6 +426,7 @@ impl TrafficEvent {
             TrafficEvent::ResponseReceived(e) => Some(e),
             TrafficEvent::Completed(e) => Some(e),
             TrafficEvent::Cleared => None,
+            TrafficEvent::WebSocketMessage { .. } => None,
         }
     }
 }
@@ -350,5 +454,97 @@ mod tests {
         let id = store.create_entry(request);
         assert!(store.get(&id).is_some());
         assert_eq!(store.count(), 1);
+    }
+
+    #[test]
+    fn test_websocket_entry() {
+        let store = TrafficStore::new(100);
+
+        let request = RequestInfo {
+            method: "GET".to_string(),
+            url: "ws://example.com/ws".to_string(),
+            http_version: "HTTP/1.1".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            body_size: 0,
+            client_addr: "127.0.0.1:12345".to_string(),
+            host: "example.com".to_string(),
+            path: "/ws".to_string(),
+        };
+
+        let id = store.create_websocket_entry(request);
+        let entry = store.get(&id).unwrap();
+        assert!(entry.is_websocket);
+        assert_eq!(entry.tags, vec!["websocket"]);
+        assert!(entry.websocket_messages.is_some());
+        assert_eq!(entry.websocket_messages.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_websocket_message_recording() {
+        let store = TrafficStore::new(100);
+
+        let request = RequestInfo {
+            method: "GET".to_string(),
+            url: "ws://example.com/ws".to_string(),
+            http_version: "HTTP/1.1".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            body_size: 0,
+            client_addr: "127.0.0.1:12345".to_string(),
+            host: "example.com".to_string(),
+            path: "/ws".to_string(),
+        };
+
+        let id = store.create_websocket_entry(request);
+
+        let msg = WebSocketMessageInfo {
+            timestamp: Utc::now(),
+            direction: WebSocketDirection::ClientToServer,
+            message_type: WebSocketMessageType::Text,
+            payload: Some("hello".to_string()),
+            payload_size: 5,
+        };
+
+        store.record_websocket_message(&id, msg, 1000);
+
+        let entry = store.get(&id).unwrap();
+        let messages = entry.websocket_messages.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].payload.as_deref(), Some("hello"));
+        assert_eq!(messages[0].payload_size, 5);
+    }
+
+    #[test]
+    fn test_websocket_message_max_cap() {
+        let store = TrafficStore::new(100);
+
+        let request = RequestInfo {
+            method: "GET".to_string(),
+            url: "ws://example.com/ws".to_string(),
+            http_version: "HTTP/1.1".to_string(),
+            headers: HashMap::new(),
+            body: None,
+            body_size: 0,
+            client_addr: "127.0.0.1:12345".to_string(),
+            host: "example.com".to_string(),
+            path: "/ws".to_string(),
+        };
+
+        let id = store.create_websocket_entry(request);
+
+        for i in 0..10 {
+            let msg = WebSocketMessageInfo {
+                timestamp: Utc::now(),
+                direction: WebSocketDirection::ClientToServer,
+                message_type: WebSocketMessageType::Text,
+                payload: Some(format!("msg{}", i)),
+                payload_size: 4,
+            };
+            store.record_websocket_message(&id, msg, 5);
+        }
+
+        let entry = store.get(&id).unwrap();
+        assert_eq!(entry.websocket_messages.unwrap().len(), 5);
     }
 }

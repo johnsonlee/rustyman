@@ -1,21 +1,32 @@
 use super::tls::TlsAcceptor;
 use super::{ProxyError, ProxyState};
-use crate::traffic::{RequestInfo, ResponseInfo};
+use crate::traffic::{
+    RequestInfo, ResponseInfo, WebSocketDirection, WebSocketMessageInfo, WebSocketMessageType,
+};
+use base64::Engine;
 use bytes::Bytes;
+use chrono::Utc;
+use futures_util::{SinkExt, StreamExt};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::client::conn::http1::Builder as ClientBuilder;
+use hyper::client::conn::http2::Builder as Http2ClientBuilder;
 use hyper::server::conn::http1::Builder as ServerBuilder;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, Uri};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto::Builder as AutoServerBuilder;
 use rustls::pki_types::ServerName;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use std::task::{Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
+use tokio_tungstenite::tungstenite;
+use tokio_tungstenite::WebSocketStream;
 use tracing::{debug, error, info, warn};
 
 /// Handles a single proxy connection
@@ -146,10 +157,11 @@ impl ProxyHandler {
         let host = host.to_string();
         let state_clone = Arc::clone(&state);
 
-        // Serve HTTP over the TLS connection
-        ServerBuilder::new()
-            .preserve_header_case(true)
-            .serve_connection(
+        // Serve HTTP/1.1 and HTTP/2 over the TLS connection (auto-detected)
+        let mut auto_builder = AutoServerBuilder::new(TokioExecutor::new());
+        auto_builder.http1().preserve_header_case(true);
+        auto_builder
+            .serve_connection_with_upgrades(
                 io,
                 service_fn(move |req| {
                     let state = Arc::clone(&state_clone);
@@ -245,6 +257,20 @@ impl ProxyHandler {
         port: u16,
         is_https: bool,
     ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+        // Check for WebSocket upgrade before body collection
+        if Self::is_websocket_upgrade(&req) {
+            return Self::handle_websocket_proxy(
+                state,
+                client_addr,
+                req,
+                full_url,
+                host,
+                port,
+                is_https,
+            )
+            .await;
+        }
+
         let method = req.method().clone();
         let http_version = format!("{:?}", req.version());
 
@@ -495,13 +521,15 @@ impl ProxyHandler {
             .map_err(|e| ProxyError::IoError(e))?;
 
         if is_https {
-            // TLS connection
+            // TLS connection with ALPN for HTTP/2 negotiation
             let mut root_store = rustls::RootCertStore::empty();
             root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-            let config = rustls::ClientConfig::builder()
+            let mut config = rustls::ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
+
+            config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
             let connector = TlsConnector::from(Arc::new(config));
 
@@ -513,7 +541,17 @@ impl ProxyHandler {
                 .await
                 .map_err(|e| ProxyError::TlsError(e.to_string()))?;
 
-            Self::send_request(TokioIo::new(tls_stream), method, host, path, headers, body).await
+            // Check negotiated ALPN protocol
+            let alpn = tls_stream.get_ref().1.alpn_protocol().map(|p| p.to_vec());
+
+            if alpn.as_deref() == Some(b"h2") {
+                debug!("Using HTTP/2 for upstream connection to {}", host);
+                Self::send_request_h2(TokioIo::new(tls_stream), method, host, path, headers, body)
+                    .await
+            } else {
+                Self::send_request(TokioIo::new(tls_stream), method, host, path, headers, body)
+                    .await
+            }
         } else {
             Self::send_request(TokioIo::new(stream), method, host, path, headers, body).await
         }
@@ -569,6 +607,483 @@ impl ProxyHandler {
             .send_request(req)
             .await
             .map_err(|e| ProxyError::HttpError(e.to_string()))
+    }
+
+    /// Send HTTP/2 request over a connection
+    async fn send_request_h2<I>(
+        io: TokioIo<I>,
+        method: &Method,
+        host: &str,
+        path: &str,
+        headers: HashMap<String, String>,
+        body: Option<Bytes>,
+    ) -> Result<Response<Incoming>, ProxyError>
+    where
+        I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let (mut sender, conn) = Http2ClientBuilder::new(TokioExecutor::new())
+            .handshake(io)
+            .await
+            .map_err(|e| ProxyError::HttpError(e.to_string()))?;
+
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                error!("HTTP/2 connection error: {}", e);
+            }
+        });
+
+        let mut req_builder = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", host);
+
+        for (key, value) in &headers {
+            if !is_hop_by_hop_header(key) && key.to_lowercase() != "host" {
+                req_builder = req_builder.header(key, value);
+            }
+        }
+
+        let req = if let Some(body) = body {
+            req_builder
+                .body(Full::new(body))
+                .map_err(|e| ProxyError::HttpError(e.to_string()))?
+        } else {
+            req_builder
+                .body(Full::new(Bytes::new()))
+                .map_err(|e| ProxyError::HttpError(e.to_string()))?
+        };
+
+        sender
+            .send_request(req)
+            .await
+            .map_err(|e| ProxyError::HttpError(e.to_string()))
+    }
+
+    /// Check if a request is a WebSocket upgrade
+    fn is_websocket_upgrade(req: &Request<Incoming>) -> bool {
+        let upgrade = req
+            .headers()
+            .get("upgrade")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_lowercase());
+        let connection = req
+            .headers()
+            .get("connection")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.to_lowercase());
+
+        upgrade.as_deref() == Some("websocket")
+            && connection
+                .as_ref()
+                .map(|c| c.contains("upgrade"))
+                .unwrap_or(false)
+    }
+
+    /// Handle WebSocket proxy upgrade
+    async fn handle_websocket_proxy(
+        state: Arc<ProxyState>,
+        client_addr: SocketAddr,
+        req: Request<Incoming>,
+        full_url: &str,
+        host: &str,
+        port: u16,
+        is_https: bool,
+    ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+        // Extract WebSocket headers before consuming the request
+        let method = req.method().to_string();
+        let http_version = format!("{:?}", req.version());
+        let path = req.uri().path().to_string();
+        let headers: HashMap<String, String> = req
+            .headers()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+
+        let ws_key = headers
+            .get("sec-websocket-key")
+            .cloned()
+            .unwrap_or_default();
+        let ws_protocol = headers.get("sec-websocket-protocol").cloned();
+
+        info!("WebSocket upgrade: {} from {}", full_url, client_addr);
+
+        // Compute accept key
+        let accept_key =
+            tungstenite::handshake::derive_accept_key(ws_key.as_bytes());
+
+        // Create traffic entry
+        let request_info = RequestInfo {
+            method,
+            url: full_url.to_string(),
+            http_version,
+            headers: headers.clone(),
+            body: None,
+            body_size: 0,
+            client_addr: client_addr.to_string(),
+            host: host.to_string(),
+            path,
+        };
+
+        let max_ws_messages = {
+            let config = state.config.read().await;
+            config.proxy.max_websocket_messages
+        };
+
+        let entry_id = state.traffic.create_websocket_entry(request_info);
+
+        // Prepare values for the spawned task
+        let host = host.to_string();
+        let full_url = full_url.to_string();
+        let ws_protocol_clone = ws_protocol.clone();
+        let state_clone = Arc::clone(&state);
+
+        // Get upgrade future (consumes the request)
+        let on_upgrade = hyper::upgrade::on(req);
+
+        // Spawn WebSocket relay task
+        tokio::spawn(async move {
+            match on_upgrade.await {
+                Ok(upgraded) => {
+                    if let Err(e) = Self::relay_websocket(
+                        state_clone,
+                        upgraded,
+                        &full_url,
+                        &host,
+                        port,
+                        is_https,
+                        &entry_id,
+                        max_ws_messages,
+                        ws_protocol_clone.as_deref(),
+                    )
+                    .await
+                    {
+                        error!("WebSocket relay error for {}: {}", full_url, e);
+                    }
+                }
+                Err(e) => {
+                    error!("WebSocket upgrade failed: {}", e);
+                }
+            }
+        });
+
+        // Return 101 Switching Protocols
+        let mut response = Response::builder()
+            .status(StatusCode::SWITCHING_PROTOCOLS)
+            .header("upgrade", "websocket")
+            .header("connection", "Upgrade")
+            .header("sec-websocket-accept", &accept_key);
+
+        if let Some(protocol) = ws_protocol {
+            response = response.header("sec-websocket-protocol", protocol);
+        }
+
+        Ok(response.body(Full::new(Bytes::new())).unwrap())
+    }
+
+    /// Establish WebSocket relay between client and upstream
+    #[allow(clippy::too_many_arguments)]
+    async fn relay_websocket(
+        state: Arc<ProxyState>,
+        upgraded: hyper::upgrade::Upgraded,
+        full_url: &str,
+        host: &str,
+        port: u16,
+        is_https: bool,
+        entry_id: &str,
+        max_messages: usize,
+        protocol: Option<&str>,
+    ) -> Result<(), ProxyError> {
+        // Connect to upstream
+        let upstream_io = Self::connect_upstream_raw(host, port, is_https).await?;
+
+        // Build WebSocket URL for upstream
+        let ws_url = if is_https {
+            full_url.replacen("https://", "wss://", 1)
+        } else {
+            full_url.replacen("http://", "ws://", 1)
+        };
+
+        // Build upstream WebSocket request
+        let mut request = tungstenite::http::Request::builder()
+            .uri(&ws_url)
+            .header("Host", host)
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header(
+                "Sec-WebSocket-Key",
+                tungstenite::handshake::client::generate_key(),
+            );
+
+        if let Some(proto) = protocol {
+            request = request.header("Sec-WebSocket-Protocol", proto);
+        }
+
+        let request = request
+            .body(())
+            .map_err(|e| ProxyError::HttpError(format!("Failed to build WS request: {}", e)))?;
+
+        // WebSocket handshake with upstream
+        let (upstream_ws, _) = tokio_tungstenite::client_async(request, upstream_io)
+            .await
+            .map_err(|e| {
+                ProxyError::HttpError(format!("WebSocket upstream handshake failed: {}", e))
+            })?;
+
+        // Wrap client IO as WebSocket (handshake already completed by hyper)
+        let client_io = TokioIo::new(upgraded);
+        let client_ws = WebSocketStream::from_raw_socket(
+            client_io,
+            tungstenite::protocol::Role::Server,
+            None,
+        )
+        .await;
+
+        // Relay frames bidirectionally
+        Self::relay_websocket_frames(state, client_ws, upstream_ws, entry_id, max_messages).await;
+
+        Ok(())
+    }
+
+    /// Bidirectionally relay WebSocket frames between client and upstream
+    async fn relay_websocket_frames<C, U>(
+        state: Arc<ProxyState>,
+        client_ws: WebSocketStream<C>,
+        upstream_ws: WebSocketStream<U>,
+        entry_id: &str,
+        max_messages: usize,
+    ) where
+        C: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+        U: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let (mut client_sink, mut client_stream) = client_ws.split();
+        let (mut upstream_sink, mut upstream_stream) = upstream_ws.split();
+
+        let entry_id_1 = entry_id.to_string();
+        let entry_id_2 = entry_id.to_string();
+        let state_1 = Arc::clone(&state);
+        let state_2 = Arc::clone(&state);
+
+        let client_to_upstream = async move {
+            while let Some(msg) = client_stream.next().await {
+                match msg {
+                    Ok(msg) => {
+                        let ws_info =
+                            ws_message_to_info(&msg, WebSocketDirection::ClientToServer);
+                        state_1.traffic.record_websocket_message(
+                            &entry_id_1,
+                            ws_info,
+                            max_messages,
+                        );
+
+                        if msg.is_close() {
+                            let _ = upstream_sink.send(msg).await;
+                            break;
+                        }
+                        if upstream_sink.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug!("WebSocket client stream error: {}", e);
+                        break;
+                    }
+                }
+            }
+        };
+
+        let upstream_to_client = async move {
+            while let Some(msg) = upstream_stream.next().await {
+                match msg {
+                    Ok(msg) => {
+                        let ws_info =
+                            ws_message_to_info(&msg, WebSocketDirection::ServerToClient);
+                        state_2.traffic.record_websocket_message(
+                            &entry_id_2,
+                            ws_info,
+                            max_messages,
+                        );
+
+                        if msg.is_close() {
+                            let _ = client_sink.send(msg).await;
+                            break;
+                        }
+                        if client_sink.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug!("WebSocket upstream stream error: {}", e);
+                        break;
+                    }
+                }
+            }
+        };
+
+        tokio::select! {
+            _ = client_to_upstream => {},
+            _ = upstream_to_client => {},
+        }
+
+        state.traffic.mark_complete(entry_id);
+    }
+
+    /// Connect to upstream server, returning a raw TCP or TLS stream
+    async fn connect_upstream_raw(
+        host: &str,
+        port: u16,
+        is_https: bool,
+    ) -> Result<UpstreamStream, ProxyError> {
+        let target = format!("{}:{}", host, port);
+        let stream = TcpStream::connect(&target).await?;
+
+        if is_https {
+            let mut root_store = rustls::RootCertStore::empty();
+            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+            let config = rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
+
+            let connector = TlsConnector::from(Arc::new(config));
+            let server_name = ServerName::try_from(host.to_string())
+                .map_err(|e| ProxyError::TlsError(format!("Invalid server name: {}", e)))?;
+
+            let tls_stream = connector
+                .connect(server_name, stream)
+                .await
+                .map_err(|e| ProxyError::TlsError(e.to_string()))?;
+
+            Ok(UpstreamStream::Tls(Box::new(tls_stream)))
+        } else {
+            Ok(UpstreamStream::Plain(stream))
+        }
+    }
+}
+
+/// Raw upstream stream — either plain TCP or TLS
+enum UpstreamStream {
+    Plain(TcpStream),
+    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
+}
+
+impl AsyncRead for UpstreamStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            UpstreamStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            UpstreamStream::Tls(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for UpstreamStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            UpstreamStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            UpstreamStream::Tls(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            UpstreamStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            UpstreamStream::Tls(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            UpstreamStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            UpstreamStream::Tls(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+impl Unpin for UpstreamStream {}
+
+/// Convert a tungstenite Message to a WebSocketMessageInfo for traffic recording
+fn ws_message_to_info(
+    msg: &tungstenite::Message,
+    direction: WebSocketDirection,
+) -> WebSocketMessageInfo {
+    let (message_type, payload, payload_size) = match msg {
+        tungstenite::Message::Text(text) => {
+            (WebSocketMessageType::Text, Some(text.clone()), text.len())
+        }
+        tungstenite::Message::Binary(data) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+            (WebSocketMessageType::Binary, Some(encoded), data.len())
+        }
+        tungstenite::Message::Ping(data) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+            (WebSocketMessageType::Ping, Some(encoded), data.len())
+        }
+        tungstenite::Message::Pong(data) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+            (WebSocketMessageType::Pong, Some(encoded), data.len())
+        }
+        tungstenite::Message::Close(frame) => {
+            let payload = frame.as_ref().map(|f| f.reason.to_string());
+            let size = frame.as_ref().map(|f| f.reason.len()).unwrap_or(0);
+            (WebSocketMessageType::Close, payload, size)
+        }
+        tungstenite::Message::Frame(_) => (WebSocketMessageType::Binary, None, 0),
+    };
+
+    WebSocketMessageInfo {
+        timestamp: Utc::now(),
+        direction,
+        message_type,
+        payload,
+        payload_size,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traffic::{WebSocketDirection, WebSocketMessageType};
+
+    #[test]
+    fn test_ws_message_to_info_text() {
+        let msg = tungstenite::Message::Text("hello world".into());
+        let info = ws_message_to_info(&msg, WebSocketDirection::ClientToServer);
+        assert!(matches!(info.message_type, WebSocketMessageType::Text));
+        assert_eq!(info.payload_size, 11);
+        assert!(info.payload.is_some());
+    }
+
+    #[test]
+    fn test_ws_message_to_info_binary() {
+        let data = vec![1u8, 2, 3, 4];
+        let msg = tungstenite::Message::Binary(data.clone().into());
+        let info = ws_message_to_info(&msg, WebSocketDirection::ServerToClient);
+        assert!(matches!(info.message_type, WebSocketMessageType::Binary));
+        assert_eq!(info.payload_size, 4);
+        // Verify base64 round-trip
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(info.payload.unwrap())
+            .unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn test_ws_message_to_info_close() {
+        let msg = tungstenite::Message::Close(Some(tungstenite::protocol::CloseFrame {
+            code: tungstenite::protocol::frame::coding::CloseCode::Normal,
+            reason: "goodbye".into(),
+        }));
+        let info = ws_message_to_info(&msg, WebSocketDirection::ClientToServer);
+        assert!(matches!(info.message_type, WebSocketMessageType::Close));
+        assert_eq!(info.payload.as_deref(), Some("goodbye"));
     }
 }
 

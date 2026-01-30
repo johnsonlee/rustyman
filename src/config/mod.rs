@@ -57,6 +57,8 @@ pub struct ProxyConfig {
     pub timeout: u64,
     /// Max concurrent connections
     pub max_connections: usize,
+    /// Max WebSocket messages to record per connection
+    pub max_websocket_messages: usize,
 }
 
 impl Default for ProxyConfig {
@@ -67,6 +69,7 @@ impl Default for ProxyConfig {
             mitm_enabled: true,
             timeout: 30,
             max_connections: 1000,
+            max_websocket_messages: 1000,
         }
     }
 }
