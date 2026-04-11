@@ -42,7 +42,7 @@ mitmproxy is designed for humans — TUI interaction, Python scripting, manual i
 ### Homebrew (macOS/Linux)
 
 ```bash
-brew tap johnsonlee/rustyman
+brew tap johnsonlee/tap
 brew install rustyman
 ```
 
